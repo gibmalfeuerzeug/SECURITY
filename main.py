@@ -139,14 +139,14 @@ async def actor_from_audit_log(guild: discord.Guild, action: AuditLogAction, tar
 async def notify_owner_after_restart():
     await asyncio.sleep(3)
     message_text = (
-        "🌐 Globex Security 🌐\n"
+        "🛡️TrustGate🛡️\n"
         "@User*, lieber Eigentümer des Servers **(servername)*,\n"
         "aufgrund dessen, dass mein Besitzer regelmäßig einen neuen Free-Plan bei einer Hosting-Website beantragen muss, "
         "wurde ich neu gestartet.\n"
         "Dabei werden leider die Nutzer in der Whitelist und Blacklist gelöscht.\n"
         "Bitte stelle daher deine Whitelist und Blacklist erneut ein.\n\n"
         "*Mit freundlichen Grüßen,*\n"
-        "_Globex Security_"
+        "_TrustGate_"
     )
 
     for guild in bot.guilds:
