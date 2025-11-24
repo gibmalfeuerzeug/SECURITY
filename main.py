@@ -399,7 +399,9 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
         await interaction.response.send_message(f"✅ Webhook erstellt: {hook.url}", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Erstellen des Webhooks: {e}", ephemeral=True)
-   TOKEN = os.getenv("DISCORD_TOKEN")
+  
+
+TOKEN = os.getenv("DISCORD_TOKEN")
 WEBHOOK_URL = os.getenv("LOG_WEBHOOK_URL")
 
 intents = discord.Intents.default()
