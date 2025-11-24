@@ -399,49 +399,63 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
         await interaction.response.send_message(f"✅ Webhook erstellt: {hook.url}", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Erstellen des Webhooks: {e}", ephemeral=True)
-        
-# ---- ENV Variablen für Railway ----
-TOKEN = os.getenv("DISCORD_TOKEN")
-LOG_WEBHOOK = os.getenv("LOG_WEBHOOK_URL")
+   TOKEN = os.getenv("DISCORD_TOKEN")
+WEBHOOK_URL = os.getenv("LOG_WEBHOOK_URL")
 
-# ---- Bot Setup ----
-intents = discord.Intents.all()
+intents = discord.Intents.default()
+intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ---- Webhook Logger Funktion ----
-def log(message: str):
-    if LOG_WEBHOOK:
-        try:
-            requests.post(LOG_WEBHOOK, json={"content": message})
-        except Exception as e:
-            print(f"Webhook Error: {e}")
+# Webhook Logger Funktion
+async def log(msg: str):
+    """Sendet Logs an deinen privaten Webhook."""
+    async with aiohttp.ClientSession() as session:
+        webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+        await webhook.send(f"🛡️ **Bot-Log:**\n{msg}", username="SecurityBot Logger")
 
+# --- EVENTS --------------------------------------------------------
 
-# ---- EVENTS ----
 @bot.event
 async def on_ready():
-    log(f"🟢 Bot gestartet: {bot.user} ist online.")
-    print(f"{bot.user} ist online.")
+    await log("Bot ist erfolgreich gestartet und online! ✅")
+    print("Bot ready.")
+
+
+@bot.event
+async def on_connect():
+    await log("Bot versucht zu verbinden... 🌐")
+
+
+@bot.event
+async def on_disconnect():
+    await log("Bot wurde getrennt! ❌")
+
+
+@bot.event
+async def on_resumed():
+    await log("Bot hat die Verbindung wiederhergestellt! 🔄")
 
 
 @bot.event
 async def on_command(ctx):
-    log(f"📘 Command ausgeführt: {ctx.command} von {ctx.author} in #{ctx.channel}")
+    await log(f"Command ausgeführt: `{ctx.command}` von `{ctx.author}` im Kanal `{ctx.channel}`")
 
 
 @bot.event
-async def on_command_error(ctx, error):
-    log(f"❌ Fehler bei Command '{ctx.command}': {error}")
-    await ctx.send("Es ist ein Fehler aufgetreten.")
+async def on_error(event, *args, **kwargs):
+    error = traceback.format_exc()
+    await log(f"⚠️ Fehler in Event `{event}`:\n```py\n{error}\n```")
+    print(error)
 
 
-# ---- Beispiel Command ----
+# --- Beispielcommand ----------------------------------------------
+
 @bot.command()
 async def ping(ctx):
     await ctx.send("Pong!")
-    log(f"🏓 Ping Command von {ctx.author}")
-
+    await log("Ping-Command wurde ausgeführt.")     
 # ---------- Start ----------
 if __name__ == "__main__":
     if not TOKEN:
