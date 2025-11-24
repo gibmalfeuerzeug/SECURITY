@@ -399,6 +399,72 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
         await interaction.response.send_message(f"✅ Webhook erstellt: {hook.url}", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Erstellen des Webhooks: {e}", ephemeral=True)
+
+TOKEN = os.getenv("DISCORD_TOKEN")           # Railway ENV
+WEBHOOK_URL = os.getenv(" https://discord.com/api/webhooks/1442597014373269606/nCbeTvtKcVGRfCBbCOd7tzbeQLJE2xp4QjPYMVlWKChyeZVFZTzh-ZEyoAdbqxZIeOwl")    # Railway ENV
+
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ---------- Webhook Logging ----------
+def send_log(message: str):
+    try:
+        requests.post(WEBHOOK_URL, json={"content": message})
+    except Exception as e:
+        print("Webhook error:", e)
+
+
+# ---------- Bot Events ----------
+@bot.event
+async def on_ready():
+    send_log(f"✅ **Bot gestartet:** {bot.user} ist online.")
+    print(f"Bot online: {bot.user}")
+
+
+@bot.event
+async def on_command(ctx):
+    send_log(f"⚙️ **Command ausgeführt:** `{ctx.command}` von `{ctx.author}` im Kanal `{ctx.channel}`")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    error_text = "".join(traceback.format_exception(None, error, error.__traceback__))
+    send_log(f"❌ **Fehler bei Command `{ctx.command}`:**\n```\n{error_text}\n```")
+    await ctx.send("Es ist ein Fehler aufgetreten.")
+
+
+@bot.event
+async def on_member_join(member):
+    send_log(f"👤 **Neuer User:** `{member}` ist dem Server beigetreten.")
+
+
+@bot.event
+async def on_member_remove(member):
+    send_log(f"👋 **User gegangen:** `{member}` hat den Server verlassen.")
+
+
+@bot.event
+async def on_guild_join(guild):
+    send_log(f"📥 **Bot wurde hinzugefügt:** `{guild.name}`")
+
+
+@bot.event
+async def on_guild_remove(guild):
+    send_log(f"📤 **Bot wurde entfernt:** `{guild.name}`")
+
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    error_text = traceback.format_exc()
+    send_log(f"💥 **Globaler Fehler in Event `{event}`:**\n```\n{error_text}\n```")
+
+
+# ---------- Beispiel Command ----------
+@bot.command()
+async def ping(ctx):
+    await ctx.send("Pong!")
+    send_log("🏓 **Ping Command ausgeführt**")
         
 # ---------- Start ----------
 if __name__ == "__main__":
