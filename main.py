@@ -399,64 +399,7 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
         await interaction.response.send_message(f"✅ Webhook erstellt: {hook.url}", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Erstellen des Webhooks: {e}", ephemeral=True)
-  
-
-WEBHOOK_URL = os.getenv("LOG_WEBHOOK_URL")
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-# Webhook Logger Funktion
-async def log(msg: str):
-    """Sendet Logs an deinen privaten Webhook."""
-    async with aiohttp.ClientSession() as session:
-        webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
-        await webhook.send(f"🛡️ **Bot-Log:**\n{msg}", username="SecurityBot Logger")
-
-# --- EVENTS --------------------------------------------------------
-
-@bot.event
-async def on_ready():
-    await log("Bot ist erfolgreich gestartet und online! ✅")
-    print("Bot ready.")
-
-
-@bot.event
-async def on_connect():
-    await log("Bot versucht zu verbinden... 🌐")
-
-
-@bot.event
-async def on_disconnect():
-    await log("Bot wurde getrennt! ❌")
-
-
-@bot.event
-async def on_resumed():
-    await log("Bot hat die Verbindung wiederhergestellt! 🔄")
-
-
-@bot.event
-async def on_command(ctx):
-    await log(f"Command ausgeführt: `{ctx.command}` von `{ctx.author}` im Kanal `{ctx.channel}`")
-
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    error = traceback.format_exc()
-    await log(f"⚠️ Fehler in Event `{event}`:\n```py\n{error}\n```")
-    print(error)
-
-
-# --- Beispielcommand ----------------------------------------------
-
-@bot.command()
-async def ping(ctx):
-    await ctx.send("Pong!")
-    await log("Ping-Command wurde ausgeführt.")     
+   
     
 # ---------- Start ----------
 if __name__ == "__main__":
