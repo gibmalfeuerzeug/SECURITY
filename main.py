@@ -458,6 +458,7 @@ async def on_error(event, *args, **kwargs):
 async def ping(ctx):
     await ctx.send("Pong!")
     await log("Ping-Command wurde ausgeführt.")     
+    
 # ---------- Start ----------
 if __name__ == "__main__":
     if not TOKEN:
