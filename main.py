@@ -399,6 +399,88 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
         await interaction.response.send_message(f"✅ Webhook erstellt: {hook.url}", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Fehler beim Erstellen des Webhooks: {e}", ephemeral=True)
+        WEBHOOK_URL = "DEINE_WEBHOOK_URL_HIER_REIN"  # <--- HIER EINTRAGEN
+
+# --- Webhook Logger Funktion ---
+async def log(message: str):
+    async with aiohttp.ClientSession() as session:
+        webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+        await webhook.send(message, username="Bot-Logger")
+
+# --- Bot Setup ---
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ----------------------------------------
+# BOT START / STATUS
+# ----------------------------------------
+@bot.event
+async def on_ready():
+    await log(f"✅ Bot gestartet: **{bot.user}**")
+    print("Bot ist online!")
+
+
+# ----------------------------------------
+# MEMBER EVENTS
+# ----------------------------------------
+@bot.event
+async def on_member_join(member):
+    await log(f"👤 Mitglied beigetreten: **{member}**")
+
+
+@bot.event
+async def on_member_remove(member):
+    await log(f"🚪 Mitglied verlassen/gekickt: **{member}**")
+
+
+# ----------------------------------------
+# MESSAGE EVENTS
+# ----------------------------------------
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot:
+        return
+
+    await log(
+        f"🗑️ Nachricht gelöscht:\n"
+        f"**Autor:** {message.author}\n"
+        f"**Channel:** {message.channel}\n"
+        f"**Inhalt:** {message.content}"
+    )
+
+
+# ----------------------------------------
+# COMMAND LOGGING
+# ----------------------------------------
+@bot.event
+async def on_command(ctx):
+    await log(f"⚙️ Command ausgeführt: **{ctx.command}** von **{ctx.author}**")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    error_text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    await log(f"❌ Fehler im Command `{ctx.command}`:\n```{error_text[:1900]}```")
+
+
+# ----------------------------------------
+# EIGENER TEST-COMMAND
+# ----------------------------------------
+@bot.command()
+async def ping(ctx):
+    await ctx.send("Pong!")
+    await log("📡 Ping wurde benutzt.")
+
+
+# ----------------------------------------
+# INTERNER FEHLERLOGGER
+# ----------------------------------------
+@bot.event
+async def on_error(event, *args, **kwargs):
+    error_text = traceback.format_exc()
+    await log(f"🔥 Interner Fehler in Event `{event}`:\n```{error_text[:1900]}```")
+
 
 # ---------- Start ----------
 if __name__ == "__main__":
