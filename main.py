@@ -11,7 +11,6 @@ from discord.ext import commands
 # ---------- Konfiguration ----------
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 BOT_ADMIN_ID = 843180408152784936
-BOT_OWNER_ID = 662596869221908480  # Deine Nutzer-ID (für DM-Alerts)
 
 # Invite-Settings
 INVITE_SPAM_WINDOW_SECONDS = 45
@@ -31,15 +30,6 @@ MENTION_SPAM_THRESHOLD = 3
 
 VERBOSE = True
 
-# ---------- Embed Farbe & Log Channel Konfiguration ----------
-EMBED_COLOR = discord.Color.from_rgb(0, 110, 255)  # Dunkel Neon Blau
-LOG_CHANNELS = {
-    "moderation": "trustgate-logs-mod",
-    "security": "trustgate-logs-security",
-    "errors": "trustgate-logs-errors",
-    "joins": "trustgate-logs-joins",
-}
-
 # ---------- Bot & Intents ----------
 intents = discord.Intents.default()
 intents.message_content = True
@@ -51,7 +41,7 @@ intents.guild_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ---------- Hilfsvariablen ----------
+# ---------- Hilfsfunktionen ----------
 INVITE_REGEX = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord\.gg|discord\.com/invite|discordapp\.com/invite)/[A-Za-z0-9\-]+",
     re.IGNORECASE,
@@ -68,54 +58,10 @@ ban_kick_actions: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10)
 mention_timestamps: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
 mention_messages: dict[int, deque[discord.Message]] = defaultdict(lambda: deque(maxlen=10))
 
-# ---------- Logging / Embed Hilfsfunktionen ----------
-
 def log(*args):
     if VERBOSE:
         print("[LOG]", *args)
 
-async def send_embed(destination, title: str, description: str, *, ephemeral: bool = False):
-    embed = discord.Embed(title=title, description=description, color=EMBED_COLOR, timestamp=datetime.now(timezone.utc))
-    try:
-        await destination.send(embed=embed)
-    except Exception as e:
-        log(f"Fehler beim Senden eines Embeds an {destination}: {e}")
-
-async def dm_owner(title: str, description: str):
-    try:
-        owner = await bot.fetch_user(BOT_OWNER_ID)
-        if owner:
-            await send_embed(owner, title, description)
-    except Exception as e:
-        log(f"Fehler beim Senden einer DM an Owner: {e}")
-
-async def get_or_create_log_channel(guild: discord.Guild, name: str) -> discord.TextChannel | None:
-    chan = discord.utils.get(guild.text_channels, name=name)
-    if chan:
-        return chan
-    try:
-        chan = await guild.create_text_channel(name)
-        log(f"Log-Channel '{name}' in {guild.name} erstellt.")
-        return chan
-    except Exception as e:
-        log(f"Konnte Log-Channel '{name}' in {guild.name} nicht erstellen: {e}")
-        return None
-
-async def setup_log_channels(guild: discord.Guild):
-    for key, name in LOG_CHANNELS.items():
-        await get_or_create_log_channel(guild, name)
-
-async def log_to_channel(guild: discord.Guild, log_type: str, title: str, message: str):
-    name = LOG_CHANNELS.get(log_type)
-    if not name:
-        return
-    chan = discord.utils.get(guild.text_channels, name=name)
-    if not chan:
-        chan = await get_or_create_log_channel(guild, name)
-    if chan:
-        await send_embed(chan, title, message)
-
-# ---------- Utility Funktionen (Moderation Actions) ----------
 async def safe_delete_message(msg: discord.Message):
     try:
         await msg.delete()
@@ -145,7 +91,6 @@ async def kick_member(guild: discord.Guild, member: discord.Member | discord.Use
     try:
         await guild.kick(discord.Object(id=member.id), reason=reason)
         log(f"Kicked {member} | Reason: {reason}")
-        await log_to_channel(guild, "moderation", "🚨 Kick", f"{member} | {reason}")
     except (Forbidden, HTTPException, NotFound) as e:
         log(f"Kick failed for {member}: {e}")
 
@@ -157,7 +102,6 @@ async def ban_member(guild: discord.Guild, member: discord.Member | discord.User
     try:
         await guild.ban(discord.Object(id=member.id), reason=reason, delete_message_days=delete_days)
         log(f"Banned {member} | Reason: {reason}")
-        await log_to_channel(guild, "moderation", "⛔ Ban", f"{member} | {reason}")
     except (Forbidden, HTTPException, NotFound) as e:
         log(f"Ban failed for {member}: {e}")
 
@@ -170,7 +114,6 @@ async def timeout_member(member: discord.Member, hours: int, reason: str):
         until = datetime.now(timezone.utc) + timedelta(hours=hours)
         await member.edit(timed_out_until=until, reason=reason)
         log(f"Timed out {member} until {until} | Reason: {reason}")
-        await log_to_channel(member.guild, "moderation", "⏱️ Timeout", f"{member} bis {until} | {reason}")
     except (Forbidden, HTTPException, NotFound) as e:
         log(f"Timeout failed for {member}: {e}")
 
@@ -195,30 +138,31 @@ async def actor_from_audit_log(guild: discord.Guild, action: AuditLogAction, tar
 # ---------- Nachricht an Eigentümer nach Neustart ----------
 async def notify_owner_after_restart():
     await asyncio.sleep(3)
+    message_text = (
+        "🌐 Globex Security 🌐\n"
+        "@User*, lieber Eigentümer des Servers **(servername)*,\n"
+        "aufgrund dessen, dass mein Besitzer regelmäßig einen neuen Free-Plan bei einer Hosting-Website beantragen muss, "
+        "wurde ich neu gestartet.\n"
+        "Dabei werden leider die Nutzer in der Whitelist und Blacklist gelöscht.\n"
+        "Bitte stelle daher deine Whitelist und Blacklist erneut ein.\n\n"
+        "*Mit freundlichen Grüßen,*\n"
+        "_Globex Security_"
+    )
+
     for guild in bot.guilds:
-        message_text = (
-            "🛡️TrustGate🛡️\n"
-            "@User*, lieber Eigentümer des Servers **(servername)*,\n"
-            "aufgrund dessen, dass mein Besitzer regelmäßig einen neuen Free-Plan bei einer Hosting-Website beantragen muss, "
-            "wurde ich neu gestartet.\n"
-            "Dabei werden leider die Nutzer in der Whitelist und Blacklist gelöscht.\n"
-            "Bitte stelle daher deine Whitelist und Blacklist erneut ein.\n\n"
-            "*Mit freundlichen Grüßen,*\n"
-            "_TrustGate_"
-        )
         try:
             owner = guild.owner or await bot.fetch_user(guild.owner_id)
             if owner:
                 try:
-                    await send_embed(owner, f"Neustart: {guild.name}", message_text.replace("@User", owner.mention).replace("(servername)", guild.name))
+                    await owner.send(message_text.replace("@User", owner.mention).replace("(servername)", guild.name))
                     log(f"Neustart-Nachricht an {owner} per DM gesendet ({guild.name})")
                 except (Forbidden, HTTPException):
-                    channel = discord.utils.get(guild.text_channels, name=LOG_CHANNELS.get("moderation"))
+                    channel = discord.utils.get(guild.text_channels, name="moderator-only")
                     if channel:
-                        await send_embed(channel, f"Neustart: {guild.name}", message_text.replace("@User", owner.mention).replace("(servername)", guild.name))
+                        await channel.send(message_text.replace("@User", owner.mention).replace("(servername)", guild.name))
                         log(f"Neustart-Nachricht an #{channel.name} in {guild.name} gesendet")
                     else:
-                        log(f"Kein geeigneter Kanal in {guild.name} gefunden.")
+                        log(f"Kein 'moderator-only'-Kanal in {guild.name} gefunden.")
         except Exception as e:
             log(f"Fehler beim Benachrichtigen des Eigentümers in {guild.name}: {e}")
 
@@ -230,12 +174,6 @@ async def on_ready():
         status=discord.Status.online,
         activity=discord.Game("Bereit zum Beschützen!")
     )
-
-    for guild in bot.guilds:
-        try:
-            await setup_log_channels(guild)
-        except Exception as e:
-            log(f"Fehler beim Setup der Log-Channels in {guild.name}: {e}")
 
     asyncio.create_task(notify_owner_after_restart())
 
@@ -286,14 +224,8 @@ async def on_message(message: discord.Message):
             while dq and (now_ts - dq[0]) > INVITE_SPAM_WINDOW_SECONDS:
                 dq.popleft()
             if len(dq) >= INVITE_SPAM_THRESHOLD:
-                await kick_member(message.guild, message.author, "Invite-Link-Spam (Kick nach mehreren Links)")
+                await kick_member(message.guild, message.author, "Invite-Link-Spam (Kick nach 5 Links in 30s)")
                 invite_timestamps[message.author.id].clear()
-                await log_to_channel(
-                    message.guild,
-                    "security",
-                    "🚫 Invite Spam erkannt",
-                    f"{message.author} wurde gekickt wegen Invite Spam."
-                )
 
     # --- Anti Mention Spam ---
     if not is_whitelisted(message.author):
@@ -319,12 +251,6 @@ async def on_message(message: discord.Message):
                     await safe_delete_message(msg)
                 mention_timestamps[message.author.id].clear()
                 mention_messages[message.author.id].clear()
-                await log_to_channel(
-                    message.guild,
-                    "security",
-                    "📢 Mention Spam erkannt",
-                    f"{message.author} wurde gekickt wegen Massen-Pings."
-                )
 
     await bot.process_commands(message)
 
@@ -347,7 +273,6 @@ async def on_webhooks_update(channel: discord.abc.GuildChannel):
         try:
             await hook.delete(reason="Anti-Webhook aktiv")
             log(f"Webhook {hook.name} gelöscht in #{channel.name}")
-            await log_to_channel(guild, "security", "🧩 Webhook gelöscht", f"Webhook {hook.name} in #{channel.name} wurde gelöscht.")
         except (Forbidden, HTTPException, NotFound):
             pass
     if isinstance(actor, discord.Member) and not is_whitelisted(actor):
@@ -371,7 +296,6 @@ async def on_member_join(member: discord.Member):
         if inviter and not is_whitelisted(inviter):
             await kick_member(member.guild, member, "Bot wurde von nicht-whitelisted User eingeladen")
             await kick_member(member.guild, inviter, "Bot eingeladen ohne Whitelist-Berechtigung")
-            await log_to_channel(member.guild, "joins", "🤖 Unautorisierter Bot eingeladen", f"Bot {member} wurde entfernt und Einladender {inviter} gekickt.")
 
 # ---------- Anti Channel Delete ----------
 @bot.event
@@ -379,7 +303,6 @@ async def on_guild_channel_delete(channel):
     actor = await actor_from_audit_log(channel.guild, AuditLogAction.channel_delete, within_seconds=10)
     if isinstance(actor, discord.Member) and not is_whitelisted(actor):
         await kick_member(channel.guild, actor, "Kanal gelöscht ohne Berechtigung")
-        await log_to_channel(channel.guild, "security", "🗑️ Kanal gelöscht", f"{actor} hat einen Kanal gelöscht.")
 
 # ---------- Anti Role Delete ----------
 @bot.event
@@ -387,38 +310,35 @@ async def on_guild_role_delete(role):
     actor = await actor_from_audit_log(role.guild, AuditLogAction.role_delete, within_seconds=10)
     if isinstance(actor, discord.Member) and not is_whitelisted(actor):
         await kick_member(role.guild, actor, "Rolle gelöscht ohne Berechtigung")
-        await log_to_channel(role.guild, "security", "🔐 Rolle gelöscht", f"{actor} hat eine Rolle gelöscht.")
 
 # ---------- 🆕 Anti Channel Create ----------
 @bot.event
 async def on_guild_channel_create(channel):
     actor = await actor_from_audit_log(channel.guild, AuditLogAction.channel_create, within_seconds=10)
+
     if isinstance(actor, discord.Member) and not is_whitelisted(actor):
         await kick_member(channel.guild, actor, "Kanal erstellt ohne Whitelist-Berechtigung")
-        await log_to_channel(channel.guild, "security", "📂 Kanal erstellt", f"{actor} hat einen Kanal erstellt.")
 
-# ---------- Slash Commands (alle Antworten als Embed) ----------
+# ---------- Slash Commands ----------
 @bot.tree.command(name="addwhitelist", description="Fügt einen User zur Whitelist hinzu (Owner/Admin Only)")
 async def add_whitelist(interaction: discord.Interaction, user: discord.User):
     if not is_bot_admin(interaction):
-        return await interaction.response.send_message(embed=discord.Embed(title="❌ Keine Berechtigung.", description="Du bist kein Bot-Admin.", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
     whitelists[interaction.guild.id].add(user.id)
-    await interaction.response.send_message(embed=discord.Embed(title="✅ Whitelist", description=f"User {user} wurde in *{interaction.guild.name}* zur Whitelist hinzugefügt.", color=EMBED_COLOR), ephemeral=True)
-    await log_to_channel(interaction.guild, "moderation", "Whitelist Update", f"{user} wurde zur Whitelist hinzugefügt von {interaction.user}.")
+    await interaction.response.send_message(f"✅ User {user} wurde in *{interaction.guild.name}* zur Whitelist hinzugefügt.", ephemeral=True)
 
 @bot.tree.command(name="removewhitelist", description="Entfernt einen User von der Whitelist (Owner/Admin Only)")
 async def remove_whitelist(interaction: discord.Interaction, user: discord.User):
     if not is_bot_admin(interaction):
-        return await interaction.response.send_message(embed=discord.Embed(title="❌ Keine Berechtigung.", description="Du bist kein Bot-Admin.", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
     whitelists[interaction.guild.id].discard(user.id)
-    await interaction.response.send_message(embed=discord.Embed(title="✅ Whitelist", description=f"User {user} wurde in *{interaction.guild.name}* von der Whitelist entfernt.", color=EMBED_COLOR), ephemeral=True)
-    await log_to_channel(interaction.guild, "moderation", "Whitelist Update", f"{user} wurde von der Whitelist entfernt von {interaction.user}.")
+    await interaction.response.send_message(f"✅ User {user} wurde in *{interaction.guild.name}* von der Whitelist entfernt.", ephemeral=True)
 
 @bot.tree.command(name="showwhitelist", description="Zeigt alle User in der Whitelist")
 async def show_whitelist(interaction: discord.Interaction):
     users = whitelists[interaction.guild.id]
     if not users:
-        return await interaction.response.send_message(embed=discord.Embed(title="ℹ Whitelist ist leer.", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("ℹ Whitelist ist leer.", ephemeral=True)
     resolved = []
     for uid in users:
         try:
@@ -426,29 +346,27 @@ async def show_whitelist(interaction: discord.Interaction):
             resolved.append(user.name if user else str(uid))
         except Exception:
             resolved.append(str(uid))
-    await interaction.response.send_message(embed=discord.Embed(title="📜 Whitelist", description="\n".join(resolved), color=EMBED_COLOR), ephemeral=True)
+    await interaction.response.send_message("📜 Whitelist:\n" + "\n".join(resolved), ephemeral=True)
 
 @bot.tree.command(name="addblacklist", description="Fügt einen User zur Blacklist hinzu (Owner/Admin Only)")
 async def add_blacklist(interaction: discord.Interaction, user: discord.User):
     if not is_bot_admin(interaction):
-        return await interaction.response.send_message(embed=discord.Embed(title="❌ Keine Berechtigung.", description="Du bist kein Bot-Admin.", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
     blacklists[interaction.guild.id].add(user.id)
-    await interaction.response.send_message(embed=discord.Embed(title="✅ Blacklist", description=f"User {user} wurde in *{interaction.guild.name}* zur Blacklist hinzugefügt.", color=EMBED_COLOR), ephemeral=True)
-    await log_to_channel(interaction.guild, "moderation", "Blacklist Update", f"{user} wurde zur Blacklist hinzugefügt von {interaction.user}.")
+    await interaction.response.send_message(f"✅ User {user} wurde in *{interaction.guild.name}* zur Blacklist hinzugefügt.", ephemeral=True)
 
 @bot.tree.command(name="removeblacklist", description="Entfernt einen User von der Blacklist (Owner/Admin Only)")
 async def remove_blacklist(interaction: discord.Interaction, user: discord.User):
     if not is_bot_admin(interaction):
-        return await interaction.response.send_message(embed=discord.Embed(title="❌ Keine Berechtigung.", description="Du bist kein Bot-Admin.", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("❌ Keine Berechtigung.", ephemeral=True)
     blacklists[interaction.guild.id].discard(user.id)
-    await interaction.response.send_message(embed=discord.Embed(title="✅ Blacklist", description=f"User {user} wurde in *{interaction.guild.name}* von der Blacklist entfernt.", color=EMBED_COLOR), ephemeral=True)
-    await log_to_channel(interaction.guild, "moderation", "Blacklist Update", f"{user} wurde von der Blacklist entfernt von {interaction.user}.")
+    await interaction.response.send_message(f"✅ User {user} wurde in *{interaction.guild.name}* von der Blacklist entfernt.", ephemeral=True)
 
 @bot.tree.command(name="showblacklist", description="Zeigt alle User in der Blacklist")
 async def show_blacklist(interaction: discord.Interaction):
     users = blacklists[interaction.guild.id]
     if not users:
-        return await interaction.response.send_message(embed=discord.Embed(title="ℹ Blacklist ist leer.", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("ℹ Blacklist ist leer.", ephemeral=True)
     resolved = []
     for uid in users:
         try:
@@ -456,13 +374,13 @@ async def show_blacklist(interaction: discord.Interaction):
             resolved.append(user.name if user else str(uid))
         except Exception:
             resolved.append(str(uid))
-    await interaction.response.send_message(embed=discord.Embed(title="🚫 Blacklist", description="\n".join(resolved), color=EMBED_COLOR), ephemeral=True)
+    await interaction.response.send_message("🚫 Blacklist:\n" + "\n".join(resolved), ephemeral=True)
 
 # ---------- Neuer Slash Command: Create Webhook ----------
 @bot.tree.command(name="create-webhook", description="Erstellt einen Webhook (Whitelist Only)")
 async def create_webhook(interaction: discord.Interaction, channel: discord.TextChannel, name: str):
     if not is_whitelisted(interaction.user):
-        return await interaction.response.send_message(embed=discord.Embed(title="❌ Nicht whitelisted", description="Du bist nicht whitelisted!", color=EMBED_COLOR), ephemeral=True)
+        return await interaction.response.send_message("❌ Du bist nicht whitelisted!", ephemeral=True)
 
     try:
         hook = await channel.create_webhook(name=name, reason=f"Erstellt von whitelisted User {interaction.user}")
@@ -478,198 +396,112 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
 
         asyncio.create_task(delete_later())
 
-        await interaction.response.send_message(embed=discord.Embed(title="✅ Webhook erstellt", description=hook.url, color=EMBED_COLOR), ephemeral=True)
-        await log_to_channel(interaction.guild, "moderation", "Webhook erstellt", f"Webhook {hook.name} erstellt von {interaction.user} in #{channel.name}")
+        await interaction.response.send_message(f"✅ Webhook erstellt: {hook.url}", ephemeral=True)
     except Exception as e:
-        await interaction.response.send_message(embed=discord.Embed(title="❌ Fehler beim Erstellen des Webhooks", description=str(e), color=EMBED_COLOR), ephemeral=True)
-        await log_to_channel(interaction.guild, "errors", "Webhook Error", str(e))
+        await interaction.response.send_message(f"❌ Fehler beim Erstellen des Webhooks: {e}", ephemeral=True)
 
-# ---------- Neuer Slash Command: Setup Logs ----------
-@bot.tree.command(name="setup-logs", description="Erstellt alle Log-Channels (Owner/Admin Only)")
-async def setup_logs_command(interaction: discord.Interaction):
-    if not is_bot_admin(interaction):
-        return await interaction.response.send_message(
-            embed=discord.Embed(
-                title="❌ Keine Berechtigung.",
-                description="Du bist kein Bot-Admin.",
-                color=EMBED_COLOR
-            ),
-            ephemeral=True
-        )
-    
-    try:
-        await setup_log_channels(interaction.guild)
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="✅ Log-Channels erstellt",
-                description="Alle in LOG_CHANNELS konfigurierten Channels wurden überprüft und ggf. erstellt.",
-                color=EMBED_COLOR
-            ),
-            ephemeral=True
-        )
-        await log_to_channel(interaction.guild, "moderation", "Setup Logs", f"{interaction.user} hat alle Log-Channels eingerichtet.")
-    except Exception as e:
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="❌ Fehler beim Erstellen der Log-Channels",
-                description=str(e),
-                color=EMBED_COLOR
-            ),
-            ephemeral=True
-        )
-        await log_to_channel(interaction.guild, "errors", "Setup Logs Error", f"{interaction.user} versuchte Log-Channels einzurichten.\nFehler: {e}")
+# Farbe für alle Embeds (Neon Dunkel Blau)
+EMBED_COLOR = discord.Color.from_rgb(0, 110, 255)
 
-# ---------- /help Command ----------
-@bot.tree.command(name="help", description="Zeigt alle Bot Funktionen")
-async def help_cmd(interaction: discord.Interaction):
-    text = (
-        "🛡️ **TrustGate Security System**\n\n"
-        "**Whitelist**\n"
-        "`/addwhitelist USER`\n"
-        "`/removewhitelist USER`\n"
-        "`/showwhitelist`\n\n"
-        "**Blacklist**\n"
-        "`/addblacklist USER`\n"
-        "`/removeblacklist USER`\n"
-        "`/showblacklist`\n\n"
-        "**Webhook**\n"
-        "`/create-webhook CHANNEL NAME` (nur für Whitelisted Users)\n\n"
-        "**Schutzsysteme:**\n"
-        "• Anti Invite Spam\n"
-        "• Anti Ban/Kick Spam\n"
-        "• Anti Channel Create/Delete\n"
-        "• Anti Role Delete\n"
-        "• Anti Webhook\n"
-        "• Anti Bot Invite\n"
-        "• Anti Mention Spam\n\n"
-        "**Logs:**\n"
-        f"Alle Logs werden automatisch in: {', '.join(LOG_CHANNELS.values())} gespeichert."
-    )
-    embed = discord.Embed(title="📖 TrustGate Hilfe", description=text, color=EMBED_COLOR)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+# Log-Channel Namen
+LOG_CHANNELS = {
+    "moderation": "trustgate-logs-mod",
+    "security": "trustgate-logs-security",
+    "errors": "trustgate-logs-errors",
+    "joins": "trustgate-logs-joins",
+}
 
-# ---------- DMs + Events für Owner Alerts ----------
-@bot.event
-async def on_guild_join(guild):
-    try:
-        await setup_log_channels(guild)
-    except Exception as e:
-        log(f"Fehler beim Setup der Log-Channels in {guild.name}: {e}")
+# --------------------------------------------------------------
+# Hilfsfunktion: Eingebettete Nachrichten
+# --------------------------------------------------------------
+async def send_embed(dest, title: str, desc: str):
+    embed = discord.Embed(title=title, description=desc, color=EMBED_COLOR, timestamp=datetime.now(timezone.utc))
+    await dest.send(embed=embed)
 
-    inviter = None
-    try:
-        async for entry in guild.audit_logs(limit=5, action=AuditLogAction.bot_add):
-            if entry.target.id == bot.user.id:
-                inviter = entry.user
-                break
-    except Exception:
-        pass
+# --------------------------------------------------------------
+# Hilfsfunktion: LOG-Channels erstellen / finden
+# --------------------------------------------------------------
+async def get_or_create_log_channel(guild: discord.Guild, name: str):
+    ch = discord.utils.get(guild.text_channels, name=name)
+    if ch:
+        return ch
+    return await guild.create_text_channel(name)
 
-    owner = guild.owner or await bot.fetch_user(guild.owner_id)
-    inviter_text = f"{inviter} (ID: {inviter.id})" if inviter else "Unbekannt"
+# --------------------------------------------------------------
+# Slash-Command: /setup_log
+# --------------------------------------------------------------
+def setup_setup_log_command(bot: commands.Bot, is_bot_admin_func):
+    @bot.tree.command(name="setup_log", description="Erstellt TRUST GATE Kategorie + alle Log-Kanäle ganz unten.")
+    async def setup_log(interaction: discord.Interaction):
+        if not is_bot_admin_func(interaction):
+            return await interaction.response.send_message("❌ Keine Berechtigung!", ephemeral=True)
 
-    join_message = (
-        f"Server: {guild.name}\n"
-        f"Server-ID: {guild.id}\n"
-        f"Owner: {owner} (ID: {guild.owner_id})\n"
-        f"Einladender: {inviter_text}\n"
-        f"Mitglieder: {guild.member_count}\n"
-        f"Locale: {guild.preferred_locale}\n"
-        f"Zeit: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S UTC')}"
-    )
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ Nur auf einem Server nutzbar.", ephemeral=True)
 
-    await dm_owner("➕ Bot hinzugefügt", join_message)
-    await log_to_channel(guild, "joins", "➕ Bot hinzugefügt", join_message)
+        await interaction.response.send_message("⏳ Richte Log-System ein...", ephemeral=True)
 
-@bot.event
-async def on_error(event, *args, **kwargs):
-    try:
-        await dm_owner("⚠️ BOT FEHLER", f"Event: {event}\nArgs: {args}\nKwargs: {kwargs}")
-    except Exception as e:
-        log(f"Fehler beim Senden von Fehler-DM an Owner: {e}")
+        # Kategorie suchen oder erstellen
+        category = discord.utils.get(guild.categories, name="TRUST GATE")
+        if category is None:
+            category = await guild.create_category("TRUST GATE")
 
-@bot.event
-async def on_application_command_error(interaction: discord.Interaction, error: Exception):
-    log(f"Command Error: {error}")
-    guild = interaction.guild
-    if guild:
-        await log_to_channel(guild, "errors", "Slash Command Error", f"User: {interaction.user}\nCommand: {interaction.command.name if interaction.command else 'unknown'}\nError: {error}")
-    await dm_owner("🛑 Command Error", f"Guild: {guild.name if guild else 'DM'}\nUser: {interaction.user}\nCommand: {interaction.command.name if interaction.command else 'unknown'}\nError: {error}")
-    try:
-        await interaction.response.send_message(embed=discord.Embed(title="❌ Fehler", description="Ein Fehler ist aufgetreten. Der Bot-Owner wurde informiert.", color=EMBED_COLOR), ephemeral=True)
-    except Exception:
-        pass
+        # Kategorie ganz nach unten schieben
+        try:
+            await category.edit(position=len(guild.categories))
+        except:
+            pass
 
-# ---------- Neuer Slash Command: Setup Log Bereich ----------
+        created = []
 
-@bot.tree.command(name="setup_log", description="Erstellt alle Log-Channels unter einer TRUST GATE Kategorie (Owner/Admin Only)")
-async def setup_log(interaction: discord.Interaction):
-    if not is_bot_admin(interaction):
-        return await interaction.response.send_message(
-            embed=discord.Embed(
-                title="❌ Keine Berechtigung.",
-                description="Du bist kein Bot-Admin.",
-                color=EMBED_COLOR
-            ),
-            ephemeral=True
-        )
+        # Channels erzeugen / verschieben
+        for key, name in LOG_CHANNELS.items():
+            ch = discord.utils.get(guild.text_channels, name=name)
 
-    guild = interaction.guild
+            if ch is None:
+                ch = await guild.create_text_channel(name, category=category)
+                created.append(f"🆕 `{name}` erstellt")
+            else:
+                await ch.edit(category=category)
+                created.append(f"➡️ `{name}` verschoben")
 
-    # Kategorie suchen oder erstellen
-    category = discord.utils.get(guild.categories, name="TRUST GATE")
-    if category is None:
-        category = await guild.create_category(
-            "TRUST GATE",
-            reason=f"Erstellt von {interaction.user}"
-        )
-
-        # Kategorie ganz nach unten verschieben
-        await category.edit(position=len(guild.categories))
-
-    created_channels = []
-
-    # Log-Channels innerhalb der Kategorie erstellen
-    for key, name in LOG_CHANNELS.items():
-        chan = discord.utils.get(guild.text_channels, name=name)
-
-        if chan is None:
-            chan = await guild.create_text_channel(
-                name=name,
-                category=category,
-                reason=f"Log-Channel erstellt von {interaction.user}"
-            )
-            created_channels.append(chan.name)
-        else:
-            # Falls Channel existiert: in die TRUST GATE Kategorie verschieben
+            # Channel ans Ende der Kategorie schieben
             try:
-                await chan.edit(category=category)
+                await ch.edit(position=len(category.channels))
             except:
                 pass
 
-    # Antwort an den User
-    if created_channels:
-        msg = "Folgende Channels wurden erstellt:\n" + "\n".join(f"• {c}" for c in created_channels)
-    else:
-        msg = "Alle Log-Channels existieren bereits und wurden in die TRUST GATE Kategorie verschoben."
+        msg = "\n".join(created) if created else "Alles bereits korrekt eingerichtet."
 
-    await interaction.response.send_message(
-        embed=discord.Embed(
-            title="📂 TRUST GATE Logs eingerichtet",
-            description=msg,
-            color=EMBED_COLOR
-        ),
-        ephemeral=True
-    )
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="📂 TRUST GATE Log-System aktualisiert",
+                description=msg,
+                color=EMBED_COLOR,
+            ),
+            ephemeral=True,
+        )
 
-    # Logging
-    await log_to_channel(
-        guild,
-        "moderation",
-        "Setup Log Bereich",
-        f"{interaction.user} hat die TRUST GATE Log-Struktur eingerichtet."
-    )
-    
+# --------------------------------------------------------------
+# Slash-Command: /help
+# --------------------------------------------------------------
+def setup_help_command(bot: commands.Bot):
+    @bot.tree.command(name="help", description="Zeigt alle verfügbaren Befehle an.")
+    async def help_cmd(interaction: discord.Interaction):
+        embed = discord.Embed(title="📘 TRUST GATE — Hilfe", color=EMBED_COLOR)
+        embed.add_field(name="/setup_log", value="Erstellt alle TRUST GATE Log-Channels ganz unten.", inline=False)
+        embed.add_field(name="/help", value="Zeigt diese Hilfe an.", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# --------------------------------------------------------------
+# Initialisierungsmethode für deinen Main-Bot
+# --------------------------------------------------------------
+def initialize_trustgate_module(bot: commands.Bot, is_bot_admin_func):
+    setup_setup_log_command(bot, is_bot_admin_func)
+    setup_help_command(bot)
+
+
 # ---------- Start ----------
 if __name__ == "__main__":
     if not TOKEN:
