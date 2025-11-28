@@ -4,12 +4,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
 
-import discordimport os
-import re
-import asyncio
-from datetime import datetime, timedelta, timezone
-from collections import defaultdict, deque
-
 import discord
 from discord import AuditLogAction, Forbidden, HTTPException, NotFound
 from discord.ext import commands
@@ -553,12 +547,23 @@ async def on_guild_join(guild):
 
     owner = guild.owner or await bot.fetch_user(guild.owner_id)
 
+        inviter_text = f"{inviter} (ID: {inviter.id})" if inviter else "Unbekannt"
+
     join_message = (
         f"Server: {guild.name}
 "
         f"Server-ID: {guild.id}
 "
         f"Owner: {owner} (ID: {guild.owner_id})
+"
+        f"Einladender: {inviter_text}
+"
+        f"Mitglieder: {guild.member_count}
+"
+        f"Locale: {guild.preferred_locale}
+"
+        f"Zeit: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S UTC')}"
+    )
 "
         f"Einladender: {inviter} (ID: {inviter.id})" if inviter else "Einladender: Unbekannt" + "
 "
@@ -599,303 +604,3 @@ if __name__ == "__main__":
         raise SystemExit("Fehlende Umgebungsvariable DISCORD_TOKEN.")
     # Railway + Python kompatibel — benutze einfach die DISCORD_TOKEN Umgebungsvariable
     bot.run(TOKEN)
-
-from discord import AuditLogAction, Forbidden, HTTPException, NotFound
-from discord.ext import commands
-
-# ---------- Konfiguration ----------
-TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
-BOT_ADMIN_ID = 843180408152784936
-BOT_OWNER_ID = 662596869221908480  # Deine Nutzer-ID (für DM-Alerts)
-
-# Invite-Settings
-INVITE_SPAM_WINDOW_SECONDS = 45
-INVITE_SPAM_THRESHOLD = 5
-INVITE_TIMEOUT_HOURS = 1
-
-# Anti-Webhook Settings
-WEBHOOK_STRIKES_BEFORE_KICK = 3
-
-# Anti Ban/Kick Spamm Settings
-ANTI_BAN_KICK_WINDOW_SECONDS = 60
-ANTI_BAN_KICK_THRESHOLD = 3
-
-# Anti Mention Spam Settings
-MENTION_SPAM_WINDOW_SECONDS = 30
-MENTION_SPAM_THRESHOLD = 3
-
-VERBOSE = True
-
-# ---------- Embed Farbe & Log Channel Konfiguration ----------
-EMBED_COLOR = discord.Color.from_rgb(0, 110, 255)  # Dunkel Neon Blau
-LOG_CHANNELS = {
-    "moderation": "trustgate-logs-mod",
-    "security": "trustgate-logs-security",
-    "errors": "trustgate-logs-errors",
-    "joins": "trustgate-logs-joins",
-}
-
-# ---------- Bot & Intents ----------
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.members = True
-intents.bans = True
-intents.webhooks = True
-intents.guild_messages = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# ---------- Hilfsvariablen ----------
-INVITE_REGEX = re.compile(
-    r"(?:https?://)?(?:www\.)?(?:discord\.gg|discord\.com/invite|discordapp\.com/invite)/[A-Za-z0-9\-]+",
-    re.IGNORECASE,
-)
-
-whitelists: dict[int, set[int]] = defaultdict(set)
-blacklists: dict[int, set[int]] = defaultdict(set)
-
-invite_timestamps: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=50))
-webhook_strikes: defaultdict[int, int] = defaultdict(int)
-existing_webhooks: dict[int, set[int]] = defaultdict(set)
-
-ban_kick_actions: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
-mention_timestamps: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
-mention_messages: dict[int, deque[discord.Message]] = defaultdict(lambda: deque(maxlen=10))
-
-# ---------- Logging / Embed Hilfsfunktionen ----------
-
-def log(*args):
-    if VERBOSE:
-        print("[LOG]", *args)
-
-async def send_embed(destination, title: str, description: str, *, ephemeral: bool = False):
-    """Sends a standardized embed to a destination.
-    destination can be a TextChannel, Member, User or InteractionResponse.
-    For interaction responses, call interaction.response.send_message(embed=...) directly.
-    """
-    embed = discord.Embed(title=title, description=description, color=EMBED_COLOR, timestamp=datetime.now(timezone.utc))
-    # If destination is an InteractionResponse (we expect a discord.Interaction), use its response
-    try:
-        # typical destinations: discord.abc.Messageable (TextChannel, Member, User)
-        await destination.send(embed=embed)
-    except Exception as e:
-        # Fallback logging — we don't want the bot to crash if a DM or channel send fails
-        log(f"Fehler beim Senden eines Embeds an {destination}: {e}")
-
-async def dm_owner(title: str, description: str):
-    try:
-        owner = await bot.fetch_user(BOT_OWNER_ID)
-        if owner:
-            await send_embed(owner, title, description)
-    except Exception as e:
-        log(f"Fehler beim Senden einer DM an Owner: {e}")
-
-async def get_or_create_log_channel(guild: discord.Guild, name: str) -> discord.TextChannel | None:
-    chan = discord.utils.get(guild.text_channels, name=name)
-    if chan:
-        return chan
-    try:
-        chan = await guild.create_text_channel(name)
-        log(f"Log-Channel '{name}' in {guild.name} erstellt.")
-        return chan
-    except Exception as e:
-        log(f"Konnte Log-Channel '{name}' in {guild.name} nicht erstellen: {e}")
-        return None
-
-async def setup_log_channels(guild: discord.Guild):
-    for key, name in LOG_CHANNELS.items():
-        await get_or_create_log_channel(guild, name)
-
-async def log_to_channel(guild: discord.Guild, log_type: str, title: str, message: str):
-    name = LOG_CHANNELS.get(log_type)
-    if not name:
-        return
-    chan = discord.utils.get(guild.text_channels, name=name)
-    if not chan:
-        chan = await get_or_create_log_channel(guild, name)
-    if chan:
-        await send_embed(chan, title, message)
-
-# ---------- Utility Funktionen (Moderation Actions) ----------
-async def safe_delete_message(msg: discord.Message):
-    try:
-        await msg.delete()
-    except (NotFound, Forbidden, HTTPException):
-        pass
-
-
-def is_whitelisted(member: discord.Member | discord.User) -> bool:
-    gid = getattr(getattr(member, "guild", None), "id", None)
-    if gid is None:
-        return False
-    return member.id in whitelists[gid]
-
-
-def is_blacklisted(member: discord.Member | discord.User) -> bool:
-    gid = getattr(getattr(member, "guild", None), "id", None)
-    if gid is None:
-        return False
-    return member.id in blacklists[gid]
-
-
-def is_bot_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.id == BOT_ADMIN_ID or (interaction.guild and interaction.user.id == interaction.guild.owner_id)
-
-async def kick_member(guild: discord.Guild, member: discord.Member | discord.User, reason: str):
-    if not member or (isinstance(member, discord.Member) and is_whitelisted(member)):
-        return
-    if member.id == bot.user.id:
-        return
-    try:
-        await guild.kick(discord.Object(id=member.id), reason=reason)
-        log(f"Kicked {member} | Reason: {reason}")
-        await log_to_channel(guild, "moderation", "🚨 Kick", f"{member} | {reason}")
-    except (Forbidden, HTTPException, NotFound) as e:
-        log(f"Kick failed for {member}: {e}")
-
-async def ban_member(guild: discord.Guild, member: discord.Member | discord.User, reason: str, delete_days: int = 0):
-    if not member or (isinstance(member, discord.Member) and is_whitelisted(member)):
-        return
-    if member.id == bot.user.id:
-        return
-    try:
-        await guild.ban(discord.Object(id=member.id), reason=reason, delete_message_days=delete_days)
-        log(f"Banned {member} | Reason: {reason}")
-        await log_to_channel(guild, "moderation", "⛔ Ban", f"{member} | {reason}")
-    except (Forbidden, HTTPException, NotFound) as e:
-        log(f"Ban failed for {member}: {e}")
-
-async def timeout_member(member: discord.Member, hours: int, reason: str):
-    if not member or is_whitelisted(member):
-        return
-    if member.id == bot.user.id:
-        return
-    try:
-        until = datetime.now(timezone.utc) + timedelta(hours=hours)
-        # discord.py versions differ; this uses the attribute name timed_out_until
-        await member.edit(timed_out_until=until, reason=reason)
-        log(f"Timed out {member} until {until} | Reason: {reason}")
-        await log_to_channel(member.guild, "moderation", "⏱️ Timeout", f"{member} bis {until} | {reason}")
-    except (Forbidden, HTTPException, NotFound) as e:
-        log(f"Timeout failed for {member}: {e}")
-
-async def actor_from_audit_log(guild: discord.Guild, action: AuditLogAction, target_id: int | None = None, within_seconds: int = 10):
-    await asyncio.sleep(0.35)
-    try:
-        now = datetime.now(timezone.utc)
-        async for entry in guild.audit_logs(limit=15, action=action):
-            if (now - entry.created_at).total_seconds() > within_seconds:
-                continue
-            if target_id is not None and getattr(entry.target, "id", None) != target_id:
-                continue
-            return entry.user
-    except Forbidden:
-        log("Keine Berechtigung, Audit-Logs zu lesen.")
-    except NotFound:
-        log(f"Audit Log Fehler: Guild {guild.id} nicht gefunden.")
-    except HTTPException as e:
-        log(f"Audit Log HTTP-Fehler: {e}")
-    return None
-
-# ---------- Nachricht an Eigentümer nach Neustart ----------
-async def notify_owner_after_restart():
-    await asyncio.sleep(3)
-    for guild in bot.guilds:
-        message_text = (
-            "🛡️TrustGate🛡️\n"
-            "@User*, lieber Eigentümer des Servers **(servername)*,\n"
-            "aufgrund dessen, dass mein Besitzer regelmäßig einen neuen Free-Plan bei einer Hosting-Website beantragen muss, "
-            "wurde ich neu gestartet.\n"
-            "Dabei werden leider die Nutzer in der Whitelist und Blacklist gelöscht.\n"
-            "Bitte stelle daher deine Whitelist und Blacklist erneut ein.\n\n"
-            "*Mit freundlichen Grüßen,*\n"
-            "_TrustGate_"
-        )
-        try:
-            owner = guild.owner or await bot.fetch_user(guild.owner_id)
-            if owner:
-                try:
-                    await send_embed(owner, f"Neustart: {guild.name}", message_text.replace("@User", owner.mention).replace("(servername)", guild.name))
-                    log(f"Neustart-Nachricht an {owner} per DM gesendet ({guild.name})")
-                except (Forbidden, HTTPException):
-                    channel = discord.utils.get(guild.text_channels, name=LOG_CHANNELS.get("moderation"))
-                    if channel:
-                        await send_embed(channel, f"Neustart: {guild.name}", message_text.replace("@User", owner.mention).replace("(servername)", guild.name))
-                        log(f"Neustart-Nachricht an #{channel.name} in {guild.name} gesendet")
-                    else:
-                        log(f"Kein geeigneter Kanal in {guild.name} gefunden.")
-        except Exception as e:
-            log(f"Fehler beim Benachrichtigen des Eigentümers in {guild.name}: {e}")
-
-# ---------- Events ----------
-@bot.event
-async def on_ready():
-    log(f"Bot online als {bot.user} (ID: {bot.user.id})")
-    await bot.change_presence(
-        status=discord.Status.online,
-        activity=discord.Game("Bereit zum Beschützen!")
-    )
-
-    # Setup log channels for all guilds on startup
-    for guild in bot.guilds:
-        try:
-            await setup_log_channels(guild)
-        except Exception as e:
-            log(f"Fehler beim Setup der Log-Channels in {guild.name}: {e}")
-
-    asyncio.create_task(notify_owner_after_restart())
-
-    try:
-        await bot.tree.sync()
-        log("Alle Slash Commands global synchronisiert ✅")
-    except Exception as e:
-        log(f"Fehler beim globalen Slash Command Sync: {e}")
-
-# ---------- Anti Ban/Kick Spamm ----------
-async def track_ban_kick(actor: discord.Member, action_type: str):
-    now = asyncio.get_event_loop().time()
-    dq = ban_kick_actions[actor.id]
-    dq.append(now)
-    while dq and (now - dq[0]) > ANTI_BAN_KICK_WINDOW_SECONDS:
-        dq.popleft()
-    if len(dq) >= ANTI_BAN_KICK_THRESHOLD:
-        guild = actor.guild
-        await kick_member(guild, actor, f"Anti Ban/Kick Spamm: {len(dq)} Aktionen in kurzer Zeit")
-        ban_kick_actions[actor.id].clear()
-
-@bot.event
-async def on_member_ban(guild: discord.Guild, user: discord.User):
-    actor = await actor_from_audit_log(guild, AuditLogAction.ban, target_id=user.id, within_seconds=30)
-    if isinstance(actor, discord.Member) and not is_whitelisted(actor):
-        await track_ban_kick(actor, "ban")
-
-@bot.event
-async def on_member_remove(member: discord.Member):
-    guild = member.guild
-    actor = await actor_from_audit_log(guild, AuditLogAction.kick, target_id=member.id, within_seconds=30)
-    if isinstance(actor, discord.Member) and not is_whitelisted(actor):
-        await track_ban_kick(actor, "kick")
-
-# ---------- Anti Webhook / Anti Invite / Anti Mention Spam ----------
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot or not message.guild:
-        return
-
-    # --- Anti Invite Spam ---
-    if INVITE_REGEX.search(message.content):
-        if not is_whitelisted(message.author):
-            await safe_delete_message(message)
-            now_ts = asyncio.get_event_loop().time()
-            dq = invite_timestamps[message.author.id]
-            dq.append(now_ts)
-            while dq and (now_ts - dq[0]) > INVITE_SPAM_WINDOW_SECONDS:
-                dq.popleft()
-            if len(dq) >= INVITE_SPAM_THRESHOLD:
-                await kick_member(message.guild, message.author, "Invite-Link-Spam (Kick nach mehreren Links)")
-                invite_timestamps[message.author.id].clear()
-                await log_to_channel(
-                    message.guild,
-                    "security",
-              
