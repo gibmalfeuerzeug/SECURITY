@@ -75,17 +75,10 @@ def log(*args):
         print("[LOG]", *args)
 
 async def send_embed(destination, title: str, description: str, *, ephemeral: bool = False):
-    """Sends a standardized embed to a destination.
-    destination can be a TextChannel, Member, User or InteractionResponse.
-    For interaction responses, call interaction.response.send_message(embed=...) directly.
-    """
     embed = discord.Embed(title=title, description=description, color=EMBED_COLOR, timestamp=datetime.now(timezone.utc))
-    # If destination is an InteractionResponse (we expect a discord.Interaction), use its response
     try:
-        # typical destinations: discord.abc.Messageable (TextChannel, Member, User)
         await destination.send(embed=embed)
     except Exception as e:
-        # Fallback logging — we don't want the bot to crash if a DM or channel send fails
         log(f"Fehler beim Senden eines Embeds an {destination}: {e}")
 
 async def dm_owner(title: str, description: str):
@@ -129,20 +122,17 @@ async def safe_delete_message(msg: discord.Message):
     except (NotFound, Forbidden, HTTPException):
         pass
 
-
 def is_whitelisted(member: discord.Member | discord.User) -> bool:
     gid = getattr(getattr(member, "guild", None), "id", None)
     if gid is None:
         return False
     return member.id in whitelists[gid]
 
-
 def is_blacklisted(member: discord.Member | discord.User) -> bool:
     gid = getattr(getattr(member, "guild", None), "id", None)
     if gid is None:
         return False
     return member.id in blacklists[gid]
-
 
 def is_bot_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.id == BOT_ADMIN_ID or (interaction.guild and interaction.user.id == interaction.guild.owner_id)
@@ -178,7 +168,6 @@ async def timeout_member(member: discord.Member, hours: int, reason: str):
         return
     try:
         until = datetime.now(timezone.utc) + timedelta(hours=hours)
-        # discord.py versions differ; this uses the attribute name timed_out_until
         await member.edit(timed_out_until=until, reason=reason)
         log(f"Timed out {member} until {until} | Reason: {reason}")
         await log_to_channel(member.guild, "moderation", "⏱️ Timeout", f"{member} bis {until} | {reason}")
@@ -242,7 +231,6 @@ async def on_ready():
         activity=discord.Game("Bereit zum Beschützen!")
     )
 
-    # Setup log channels for all guilds on startup
     for guild in bot.guilds:
         try:
             await setup_log_channels(guild)
@@ -405,7 +393,6 @@ async def on_guild_role_delete(role):
 @bot.event
 async def on_guild_channel_create(channel):
     actor = await actor_from_audit_log(channel.guild, AuditLogAction.channel_create, within_seconds=10)
-
     if isinstance(actor, discord.Member) and not is_whitelisted(actor):
         await kick_member(channel.guild, actor, "Kanal erstellt ohne Whitelist-Berechtigung")
         await log_to_channel(channel.guild, "security", "📂 Kanal erstellt", f"{actor} hat einen Kanal erstellt.")
@@ -497,6 +484,41 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
         await interaction.response.send_message(embed=discord.Embed(title="❌ Fehler beim Erstellen des Webhooks", description=str(e), color=EMBED_COLOR), ephemeral=True)
         await log_to_channel(interaction.guild, "errors", "Webhook Error", str(e))
 
+# ---------- Neuer Slash Command: Setup Logs ----------
+@bot.tree.command(name="setup-logs", description="Erstellt alle Log-Channels (Owner/Admin Only)")
+async def setup_logs_command(interaction: discord.Interaction):
+    if not is_bot_admin(interaction):
+        return await interaction.response.send_message(
+            embed=discord.Embed(
+                title="❌ Keine Berechtigung.",
+                description="Du bist kein Bot-Admin.",
+                color=EMBED_COLOR
+            ),
+            ephemeral=True
+        )
+    
+    try:
+        await setup_log_channels(interaction.guild)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Log-Channels erstellt",
+                description="Alle in LOG_CHANNELS konfigurierten Channels wurden überprüft und ggf. erstellt.",
+                color=EMBED_COLOR
+            ),
+            ephemeral=True
+        )
+        await log_to_channel(interaction.guild, "moderation", "Setup Logs", f"{interaction.user} hat alle Log-Channels eingerichtet.")
+    except Exception as e:
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="❌ Fehler beim Erstellen der Log-Channels",
+                description=str(e),
+                color=EMBED_COLOR
+            ),
+            ephemeral=True
+        )
+        await log_to_channel(interaction.guild, "errors", "Setup Logs Error", f"{interaction.user} versuchte Log-Channels einzurichten.\nFehler: {e}")
+
 # ---------- /help Command ----------
 @bot.tree.command(name="help", description="Zeigt alle Bot Funktionen")
 async def help_cmd(interaction: discord.Interaction):
@@ -529,13 +551,11 @@ async def help_cmd(interaction: discord.Interaction):
 # ---------- DMs + Events für Owner Alerts ----------
 @bot.event
 async def on_guild_join(guild):
-    # Set up channels and inform owner
     try:
         await setup_log_channels(guild)
     except Exception as e:
         log(f"Fehler beim Setup der Log-Channels in {guild.name}: {e}")
 
-    # Versuche den Einladenden über Audit-Logs zu ermitteln
     inviter = None
     try:
         async for entry in guild.audit_logs(limit=5, action=AuditLogAction.bot_add):
@@ -546,7 +566,6 @@ async def on_guild_join(guild):
         pass
 
     owner = guild.owner or await bot.fetch_user(guild.owner_id)
-
     inviter_text = f"{inviter} (ID: {inviter.id})" if inviter else "Unbekannt"
 
     join_message = (
@@ -564,7 +583,6 @@ async def on_guild_join(guild):
 
 @bot.event
 async def on_error(event, *args, **kwargs):
-    # send owner a DM when an unhandled exception occurs in an event
     try:
         await dm_owner("⚠️ BOT FEHLER", f"Event: {event}\nArgs: {args}\nKwargs: {kwargs}")
     except Exception as e:
@@ -572,7 +590,6 @@ async def on_error(event, *args, **kwargs):
 
 @bot.event
 async def on_application_command_error(interaction: discord.Interaction, error: Exception):
-    # Handle slash command errors gracefully
     log(f"Command Error: {error}")
     guild = interaction.guild
     if guild:
@@ -587,5 +604,4 @@ async def on_application_command_error(interaction: discord.Interaction, error: 
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("Fehlende Umgebungsvariable DISCORD_TOKEN.")
-    # Railway + Python kompatibel — benutze einfach die DISCORD_TOKEN Umgebungsvariable
     bot.run(TOKEN)
