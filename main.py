@@ -547,30 +547,15 @@ async def on_guild_join(guild):
 
     owner = guild.owner or await bot.fetch_user(guild.owner_id)
 
-        inviter_text = f"{inviter} (ID: {inviter.id})" if inviter else "Unbekannt"
+    inviter_text = f"{inviter} (ID: {inviter.id})" if inviter else "Unbekannt"
 
     join_message = (
-        f"Server: {guild.name}
-"
-        f"Server-ID: {guild.id}
-"
-        f"Owner: {owner} (ID: {guild.owner_id})
-"
-        f"Einladender: {inviter_text}
-"
-        f"Mitglieder: {guild.member_count}
-"
-        f"Locale: {guild.preferred_locale}
-"
-        f"Zeit: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S UTC')}"
-    )
-"
-        f"Einladender: {inviter} (ID: {inviter.id})" if inviter else "Einladender: Unbekannt" + "
-"
-        f"Mitglieder: {guild.member_count}
-"
-        f"Locale: {guild.preferred_locale}
-"
+        f"Server: {guild.name}\n"
+        f"Server-ID: {guild.id}\n"
+        f"Owner: {owner} (ID: {guild.owner_id})\n"
+        f"Einladender: {inviter_text}\n"
+        f"Mitglieder: {guild.member_count}\n"
+        f"Locale: {guild.preferred_locale}\n"
         f"Zeit: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S UTC')}"
     )
 
