@@ -600,6 +600,76 @@ async def on_application_command_error(interaction: discord.Interaction, error: 
     except Exception:
         pass
 
+# ---------- Neuer Slash Command: Setup Log Bereich ----------
+
+@bot.tree.command(name="setup_log", description="Erstellt alle Log-Channels unter einer TRUST GATE Kategorie (Owner/Admin Only)")
+async def setup_log(interaction: discord.Interaction):
+    if not is_bot_admin(interaction):
+        return await interaction.response.send_message(
+            embed=discord.Embed(
+                title="❌ Keine Berechtigung.",
+                description="Du bist kein Bot-Admin.",
+                color=EMBED_COLOR
+            ),
+            ephemeral=True
+        )
+
+    guild = interaction.guild
+
+    # Kategorie suchen oder erstellen
+    category = discord.utils.get(guild.categories, name="TRUST GATE")
+    if category is None:
+        category = await guild.create_category(
+            "TRUST GATE",
+            reason=f"Erstellt von {interaction.user}"
+        )
+
+        # Kategorie ganz nach unten verschieben
+        await category.edit(position=len(guild.categories))
+
+    created_channels = []
+
+    # Log-Channels innerhalb der Kategorie erstellen
+    for key, name in LOG_CHANNELS.items():
+        chan = discord.utils.get(guild.text_channels, name=name)
+
+        if chan is None:
+            chan = await guild.create_text_channel(
+                name=name,
+                category=category,
+                reason=f"Log-Channel erstellt von {interaction.user}"
+            )
+            created_channels.append(chan.name)
+        else:
+            # Falls Channel existiert: in die TRUST GATE Kategorie verschieben
+            try:
+                await chan.edit(category=category)
+            except:
+                pass
+
+    # Antwort an den User
+    if created_channels:
+        msg = "Folgende Channels wurden erstellt:\n" + "\n".join(f"• {c}" for c in created_channels)
+    else:
+        msg = "Alle Log-Channels existieren bereits und wurden in die TRUST GATE Kategorie verschoben."
+
+    await interaction.response.send_message(
+        embed=discord.Embed(
+            title="📂 TRUST GATE Logs eingerichtet",
+            description=msg,
+            color=EMBED_COLOR
+        ),
+        ephemeral=True
+    )
+
+    # Logging
+    await log_to_channel(
+        guild,
+        "moderation",
+        "Setup Log Bereich",
+        f"{interaction.user} hat die TRUST GATE Log-Struktur eingerichtet."
+    )
+    
 # ---------- Start ----------
 if __name__ == "__main__":
     if not TOKEN:
